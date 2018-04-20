@@ -117,18 +117,16 @@ def simple_abbreviation(string, suffix=""):
         if letter.isupper() or letter.isnumeric(): # numerals are okay too
             abbr += letter
 
-    return abbr 
+    return abbr
 
 # currently not in use.  originally, would be used to generate abbreviations
 # for better printing on the screen, but not really needed.
-def build_abbreviations(a, s, r, start, end):
+def build_abbreviations(p, r, start, end):
     abbrv = {}
 
     try:
-        ce = boto3.client('ce',
-                          aws_access_key_id=a,
-                          aws_secret_access_key=s,
-                          region_name=r) # not sure if region matters
+        session = boto3.session.Session(profile_name=p, region_name=r)
+        ce = session.client('ce')
         res = ce.get_dimension_values(SearchString="",
                                       TimePeriod={"Start":start, "End":end},
                                       Dimension="SERVICE",
@@ -144,7 +142,7 @@ def build_abbreviations(a, s, r, start, end):
         traceback.print_exc()
     return abbrv
 
-def get_costs(a, s, rlist, start, end, dims, tags, granularity="MONTHLY"):
+def get_costs(p, rlist, start, end, dims, tags, granularity="MONTHLY"):
     costs = []
 
     groupbys = []
@@ -163,10 +161,8 @@ def get_costs(a, s, rlist, start, end, dims, tags, granularity="MONTHLY"):
 
     try:
         for r in rlist:
-            ce = boto3.client('ce',
-                              aws_access_key_id=a,
-                              aws_secret_access_key=s,
-                              region_name=r)
+            session = boto3.session.Session(profile_name=p, region_name=r)
+            ce = session.client('ce')
 
 
             if len(groupbys) > 0:
@@ -231,7 +227,7 @@ def consolidate_by_group(costs):
                 out[i]['values']['usage_quantity'] += \
                         float(cost['usage_quantity']['Amount'])
                 break
-        # else add to output
+        #else: # add to output
         if found == 0:
             tmp = {'group':cost['group'][0], 'values':{}}
             tmp['values'] = {'unblended_cost': float(cost['unblended_cost']['Amount']),
@@ -274,9 +270,7 @@ def print_usage():
            "\tOptions are:\n\n"
            "\t--help - Display this help message\n"
            "\t-p --profile <profile name> - AWS profile name (can be used instead of -a and -s options)\n"
-           "\t-a --accesskey <access key> - AWS access key\n"
-           "\t-s --secretkey <secret key> - AWS secret key\n"
-           #"\t-r --regions <region1,region2,...> - A list of AWS regions.  If this option is omitted, all regions will be checked.\n"
+           "\t-r --regions <region1,region2,...> - A list of AWS regions.  If this option is omitted, all regions will be checked.\n"
            "\t-t --timerange - Time range as <start,end> time in format <YYYY-MM-DD>,<YYYY-MM-DD>\n"
            #"\t-h --human-readable <'k', 'm', or 'g'> display results in KB, MB, or GB.\n"
            "\t-j --json - Output in JSON format.\n"
@@ -288,8 +282,8 @@ def print_usage():
            "\tOne of the following three parameters are required:\n"
            "\t\t1. Both the -a and -s options.\n"
            "\t\t2. The -p option.\n"
-           "\t\t3. A valid " + FC_AWS_ENV + " environment variable.\n\n"
-           "\tDepending on the number of EBS volumes being analyzed, this tool may take several minutes to run.")
+           "\t\t3. A valid " + FC_AWS_ENV + " enviornment variable.\n\n"
+           "\tDepending on the number of EBS volumes being analyzed, this tool make take several minutes to run.")
 
 
 def parse_options(argv):
@@ -297,8 +291,6 @@ def parse_options(argv):
                      add_help=False) # use print_usage() instead
 
     parser.add_argument("-p", "--profile", type=str, required=False)
-    parser.add_argument("-a", "--access-key", type=str, required=False)
-    parser.add_argument("-s", "--secret-key", type=str, required=False)
     parser.add_argument("-r", "--regions", type=str, default="")
     parser.add_argument("-t", "--timerange", type=str, default="")
     #parser.add_argument("-h", "--human_readable", type=str, required=False, default='')
@@ -311,9 +303,9 @@ def parse_options(argv):
 
     args = parser.parse_args(argv)
     if (len(args.regions) == 0):
-        return args.profile, args.access_key, args.secret_key, [], args.timerange, args.json, args.csv, args.dimension, args.tag, args.interval
+        return args.profile, [], args.timerange, args.json, args.csv, args.dimension, args.tag, args.interval
     else:
-        return args.profile, args.access_key, args.secret_key, args.regions.split(','), args.timerange, args.json, args.csv, args.dimension, args.tag, args.interval
+        return args.profile, args.regions.split(','), args.timerange, args.json, args.csv, args.dimension, args.tag, args.interval
 
 
 def parse_args(argv):
@@ -324,52 +316,21 @@ def parse_args(argv):
             print_usage()
             os._exit(0)
 
-    p, a, s, rList, t, j, c, d, g, i = parse_options(argv[1:])
+    p, rList, t, j, c, d, g, i = parse_options(argv[1:])
 
-    return p, a, s, rList, t, j, c, d, g, i
+    return p, rList, t, j, c, d, g, i
 
 
 if __name__ == "__main__":
-    p, a, s, rList, t, j, c, d, g, i = parse_args(sys.argv)
+    p, rList, t, j, c, d, g, i = parse_args(sys.argv)
 
-    # need either -a and -s, -p, or AWS_DEFAULT_PROFILE environment variable
-    if not a and not s and not p:
+    # need either -p or AWS_DEFAULT_PROFILE environment variable
+    if not p:
         if (FC_AWS_ENV in os.environ):
             p = os.environ[FC_AWS_ENV]
         else:
             print_usage()
-            print("\nError: must provide either -p option or -a and -s options")
-            os._exit(1)
-
-    if a and not s and not p:
-        print_usage()
-        print("\nError: must provide secret access key using -s option")
-        os._exit(1)
-
-    if not a and s and not p:
-        print_usage()
-        print("\nError: must provide access key using -a option")
-        os._exit(1)
-
-    if p:
-        try:
-            home = os.environ["HOME"]
-            pFile = open(home + "/.aws/credentials", "r")
-            line = pFile.readline()
-            p = "["+p+"]"
-            while p not in line:
-                line = pFile.readline()
-                if (line == ""): # end of file
-                    print_usage()
-                    print("\nError: invalid profile: %s" %p)
-                    os._exit(1)
-
-            # get access/secret keys
-            a = pFile.readline().strip().split(" ")[2]
-            s = pFile.readline().strip().split(" ")[2]
-
-        except:
-            print("Error: reading credentials for profile %s." %p)
+            print("\nError: must provide -p option")
             os._exit(1)
 
     #if (len(rList) == 0):
@@ -414,9 +375,9 @@ if __name__ == "__main__":
     # finally, let's get some cost data!
     try:
         # comment out customer service abbreviations for now
-        #abbrv = build_abbreviations(a, s, rList[0], start_time, end_time)
+        #abbrv = build_abbreviations(p, rList[0], start_time, end_time)
         #ABBRV.update(abbrv)
-        costs = get_costs(a, s, rList, start_time, end_time, d, g, i)
+        costs = get_costs(p, rList, start_time, end_time, d, g, i)
         print_results(costs, j, c, start_time, end_time)
     except:
         e = sys.exc_info()
